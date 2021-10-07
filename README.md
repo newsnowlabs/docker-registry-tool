@@ -16,6 +16,7 @@ registry to list contents and/or pruning old images or deleting unwanted images.
 
 ## Usage
 
+```
 Usage: ./docker-registry-tool [list|prune|delete] [OPTIONS]
 
   MANDATORY OPTIONS
@@ -42,3 +43,4 @@ Usage: ./docker-registry-tool [list|prune|delete] [OPTIONS]
   DELETE OPTIONS
   
   --digest <digest>                - digest(s) to delete
+```

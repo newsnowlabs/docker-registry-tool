@@ -24,6 +24,11 @@
 # SOFTWARE.
 # ----------------------------------------------------------------------
 
+if [ ${BASH_VERSINFO[0]} -lt 4 ]; then
+  echo "$0: Need bash v4 or greater, but running only bash $BASH_VERSION; aborting" >&2
+  exit 1
+fi
+
 gc() {
   local registryContainer="$1"
  
@@ -36,6 +41,16 @@ gc() {
   else
     docker exec -it $registryContainer bin/registry garbage-collect /etc/docker/registry/config.yml -d | grep 'manifests eligible' >&2
   fi
+}
+
+tag_digest() {
+  local tag="$1"
+
+  curl -ksSL -I \
+             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	     "${registry}/v2/${repo}/manifests/$tag" \
+	     | awk 'tolower($1) == "docker-content-digest:" { print $2 }' \
+	     | tr -d $'\r'
 }
 
 delete() {
@@ -53,6 +68,22 @@ list() {
   
   local tags=($(curl -ksSL "${registry}/v2/${repo}/tags/list" | jq -r '.tags[]' 2>/dev/null | sort))
 
+  # If there's a ':latest' tag, look up the digest
+  local digest_latest=$(tag_digest latest)
+
+  # Create associated array keyed on digests of non-numeric tags
+  # Create associated array keyed on tags looking up digests
+  local -A digests_to_keep tag_digests
+  for tag in "${tags[@]}"
+  do
+    local digest=$(tag_digest "$tag")
+    tag_digests[$tag]="$digest"
+    
+    if ! [[ $tag =~ ^[0-9]+$ ]]; then
+      digests_to_keep[$digest]="1"
+    fi
+  done
+
   if [ "$MODE" == "terse" ]; then
     echo "$repo:"
   fi
@@ -62,11 +93,7 @@ list() {
   for tag in "${tags[@]}"
   do
   
-    local digest=$(curl -ksSL -I \
-                   -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-		   "${registry}/v2/${repo}/manifests/$tag" \
-		   | awk 'tolower($1) == "docker-content-digest:" { print $2 }' \
-		   | tr -d $'\r')
+    local digest="${tag_digests[$tag]}"
 
     if [ "$MODE" == "terse" ]; then
     
@@ -83,17 +110,29 @@ list() {
       echo
       continue
     fi
-  
+
+    # Skip any tag that has the same digest as ':latest' tag
+    if [ -n "$digest_latest" ] && [[ $digest == $digest_latest ]]; then
+      echo "; skipping delete (is :latest)"
+      continue
+    fi
+
     if ! [[ $tag =~ ^[0-9]+$ ]]; then
       echo "; skipping delete (tag is textual)"
       continue
     fi
 
+    # Skip any tag that has the same digest as a textually (actually non-numerically) tag
+    if [ -n "${digests_to_keep[$digest]}" ]; then
+      echo "; skipping delete (is also textually tagged)"
+      continue
+    fi
+  
     if [[ $tag > $oldest ]]; then
       echo "; skipping delete (too recent)"
       continue
     fi
-  
+
     if [ $count -lt "$PRUNE_MAX" ]; then
       count=$((count+1))
     

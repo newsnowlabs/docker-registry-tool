@@ -77,10 +77,13 @@ list() {
   for tag in "${tags[@]}"
   do
     local digest=$(tag_digest "$tag")
-    tag_digests[$tag]="$digest"
     
-    if ! [[ $tag =~ ^[0-9]+$ ]]; then
-      digests_to_keep[$digest]="1"
+    if [ -n "$digest" ]; then
+      tag_digests[$tag]="$digest"
+    
+      if ! [[ $tag =~ ^[0-9]+$ ]]; then
+        digests_to_keep[$digest]="1"
+      fi
     fi
   done
 
@@ -119,6 +122,11 @@ list() {
 
     if ! [[ $tag =~ ^[0-9]+$ ]]; then
       echo "; skipping delete (tag is textual)"
+      continue
+    fi
+
+    if [ -z "$digest" ]; then
+      echo "; skipping delete (digest not found)"
       continue
     fi
 

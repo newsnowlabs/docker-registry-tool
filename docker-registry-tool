@@ -37,9 +37,9 @@ gc() {
   echo -n "Garbage collecting: " >&2
     
   if [ "$DRY_RUN" == "0" ]; then
-    docker exec -it $registryContainer bin/registry garbage-collect /etc/docker/registry/config.yml | grep 'manifests eligible' >&2
+    docker exec $registryContainer bin/registry garbage-collect /etc/docker/registry/config.yml | grep 'manifests eligible' >&2
   else
-    docker exec -it $registryContainer bin/registry garbage-collect /etc/docker/registry/config.yml -d | grep 'manifests eligible' >&2
+    docker exec $registryContainer bin/registry garbage-collect /etc/docker/registry/config.yml -d | grep 'manifests eligible' >&2
   fi
 }
 

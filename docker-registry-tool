@@ -131,6 +131,12 @@ list() {
       continue
     fi
 
+    # Skip if no digest found (edge case, where tag is undeleteable)
+    if [ -z "$digest" ]; then
+      echo "; skipping delete (digest not found)"
+      continue
+    fi
+
     # Skip any tag that has the same digest as ':latest' tag
     if [ -n "$digest_latest" ] && [[ $digest == $digest_latest ]]; then
       echo "; skipping delete (is :latest)"
@@ -140,12 +146,6 @@ list() {
     # Skip any non-numerical tag
     if ! [[ $tag =~ ^[0-9]+$ ]]; then
       echo "; skipping delete (tag is textual)"
-      continue
-    fi
-
-    # Skip if no digest found (edge case, where tag is undeleteable)
-    if [ -z "$digest" ]; then
-      echo "; skipping delete (digest not found)"
       continue
     fi
 

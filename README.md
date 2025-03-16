@@ -35,6 +35,7 @@ Usage: ./docker-registry-tool [list|prune|delete] [OPTIONS]
   --prune-less-than <tag>          - prune only tags alphanumerically < <tag>
   --prune-tag-format <date-format> - tag date format
   --prune-max <count>              - prune at most <count> tags per repo
+  --prune-retain <count>           - retain at least <n> non-textual images per repo
   --gc-container <name|id>         - garbage collect in registry container <name|id>
 
   (<age> is any argument to 'date -d')

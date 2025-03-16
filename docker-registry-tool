@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Docker Registry Tool v1.0.0
+# Docker Registry Tool v1.1.0
 # Copyright © 2021 NewsNow Publishing Limited
 # ----------------------------------------------------------------------
 # Permission is hereby granted, free of charge, to any person 
@@ -48,9 +48,9 @@ tag_digest() {
 
   curl -ksSL -I \
              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-	     "${registry}/v2/${repo}/manifests/$tag" \
-	     | awk 'tolower($1) == "docker-content-digest:" { print $2 }' \
-	     | tr -d $'\r'
+         "${registry}/v2/${repo}/manifests/$tag" \
+         | awk 'tolower($1) == "docker-content-digest:" { print $2 }' \
+         | tr -d $'\r'
 }
 
 delete() {
@@ -66,14 +66,17 @@ list() {
   local repo="$2"
   local oldest="$3"
   
-  local tags=($(curl -ksSL "${registry}/v2/${repo}/tags/list" | jq -r '.tags[]' 2>/dev/null | sort))
+  local tags=($(curl -ksSL "${registry}/v2/${repo}/tags/list" | jq -r '.tags | sort | .[]' 2>/dev/null))
 
-  # If there's a ':latest' tag, look up the digest
+  # If there's a ':latest' tag, look up the digestx
   local digest_latest=$(tag_digest latest)
 
   # Create associated array keyed on digests of non-numeric tags
   # Create associated array keyed on tags looking up digests
   local -A digests_to_keep tag_digests
+  local -a numeric_tags=()
+  local -a pure_numeric_tags=()
+
   for tag in "${tags[@]}"
   do
     local digest=$(tag_digest "$tag")
@@ -81,11 +84,25 @@ list() {
     if [ -n "$digest" ]; then
       tag_digests[$tag]="$digest"
     
+      # Create associative array of digests having a non-numeric tag.
+      # Create an array of all numeric tags.
       if ! [[ $tag =~ ^[0-9]+$ ]]; then
         digests_to_keep[$digest]="1"
+      else
+        numeric_tags+=("$tag")
       fi
     fi
   done
+
+  # Create an array of 'pure' numeric tags i.e. numeric tags whose digest has no non-numeric tag.
+  for tag in "${numeric_tags[@]}"
+  do
+    if [ -z "${digests_to_keep[$(tag_digest "$tag")]}" ]; then
+      pure_numeric_tags+=("$tag")
+    fi
+  done
+
+  local retained=$(( ${#pure_numeric_tags[@]} + 1))
 
   if [ "$MODE" == "terse" ]; then
     echo "$repo:"
@@ -104,11 +121,11 @@ list() {
       echo -n ": digest $digest"
     
     elif [ "$MODE" == "long" ]; then
-    
-      echo -n "$(printf '%-50s %s' $repo:$tag $digest)"
-    
+
+      echo -n "$(printf '%-50s %s' "$repo:$tag" "$digest")"
+
     fi
-  
+
     if [ "$PRUNE" != "1" ]; then
       echo
       continue
@@ -120,30 +137,43 @@ list() {
       continue
     fi
 
+    # Skip any non-numerical tag
     if ! [[ $tag =~ ^[0-9]+$ ]]; then
       echo "; skipping delete (tag is textual)"
       continue
     fi
 
+    # Skip if no digest found (edge case, where tag is undeleteable)
     if [ -z "$digest" ]; then
       echo "; skipping delete (digest not found)"
       continue
     fi
 
-    # Skip any tag that has the same digest as a textually (actually non-numerically) tag
+    # Skip any tag that has the same digest as a textually (actually non-numerical) tag
     if [ -n "${digests_to_keep[$digest]}" ]; then
       echo "; skipping delete (is also textually tagged)"
       continue
     fi
-  
+
+    # Skip if numerical tag is too recent
     if [[ $tag > $oldest ]]; then
       echo "; skipping delete (too recent)"
       continue
     fi
 
+    # Keep count of remaining retained pure-numeric tags
+    retained=$((retained-1))
+
+    # Skip if deleting this numerical tag would retain too few numerical tags
+    if [ "$retained" -le "$PRUNE_RETAIN_COUNT" ]; then
+      echo "; skipping delete (retaining >= $PRUNE_RETAIN_COUNT)"
+      continue
+    fi
+
+    # Skip if this run has deleted more than allowed number of numerical tags
     if [ $count -lt "$PRUNE_MAX" ]; then
       count=$((count+1))
-    
+
       if [ "$DRY_RUN" == "1" ]; then
         echo -n "; skipping delete (dry run)"
       else
@@ -185,12 +215,13 @@ Usage: $0 [list|prune|delete] [OPTIONS]
   
   PRUNE OPTIONS
   
-  --no-dry-run|--execute|-x        - actually delete
-  --prune-older-than <age>         - prune only YYYYMMDDHHMMSS tags < <age> old
-  --prune-less-than <tag>          - prune only tags alphanumerically < <tag>
-  --prune-tag-format <date-format> - tag date format
-  --prune-max <count>              - prune at most <count> tags per repo
-  --gc-container <name|id>         - garbage collect in registry container <name|id>
+  --no-dry-run|--execute|-x   - actually delete
+  --prune-older-than <age>    - prune only YYYYMMDDHHMMSS tags < <age> old
+  --prune-less-than <tag>     - prune only tags alphanumerically < <tag>
+  --prune-tag-format <format> - tag date format
+  --prune-max <count>         - prune at most <count> tags per repo
+  --prune-retain <count>      - retain <n> pure-numeric tags per repo
+  --gc-container <name|id>    - garbage collect in registry container <name|id>
 
   (<age> is any argument to 'date -d')
   (<date-format> is any FORMAT parsed by 'date')
@@ -204,6 +235,15 @@ _EOE_
 exit 0
 }
 
+error_option() {
+  cat <<_EOE_ >&2
+$0: unrecognised option '$*'
+Try '$0 --help' for more information.
+_EOE_
+
+  exit 2
+}
+
 # Assign sensible default options
 ACTION="list"
 MODE=${MODE:-terse}
@@ -212,6 +252,7 @@ PRUNE=${PRUNE:-0}
 DRY_RUN=${DRY_RUN:-1}
 PRUNE_AGE=${PRUNE_AGE:-'1 week'}
 PRUNE_TAG_FORMAT=${PRUNE_TAG_FORMAT:-'+%Y%m%d%H%M%S'}
+PRUNE_RETAIN_COUNT=7
 
 # Override these with any specified here
 [ -f /etc/default/registry ] && . /etc/default/registry
@@ -237,7 +278,8 @@ do
     --prune-less-than) shift; OLDEST="$1"; unset PRUNE_AGE; shift; ;;
     --prune-max) shift; PRUNE_MAX="$1"; shift; ;;
     --prune-tag-format) shift; PRUNE_TAG_FORMAT="$1"; shift; ;;
-    
+    --prune-retain) shift; PRUNE_RETAIN_COUNT="$1"; shift; ;;
+        
     --registry|--registry-uri) shift; REGISTRY="$1"; shift; ;;
     --gc-container) shift; REGISTRY_CONTAINER="$1"; shift; ;;
     
@@ -245,7 +287,7 @@ do
     
     --help|help) shift; usage; ;;
     
-    *) break; ;;
+    *) [ -n "$1" ] && error_option "$1" || break; ;;
   esac
 done
 
@@ -269,6 +311,7 @@ if [ "$ACTION" == "list" ]; then
     [ -n "$OLDEST" ] && echo "  --prune-less-than   $OLDEST" >&2
     
     echo "  --prune-max         $PRUNE_MAX" >&2
+    echo "  --prune-retain      $PRUNE_RETAIN_COUNT" >&2
     
     echo >&2
   fi
@@ -278,9 +321,9 @@ if [ "$ACTION" == "list" ]; then
     REPOS=($(curl -ksSL "$REGISTRY/v2/_catalog" | jq -r '.repositories[]'))
   fi
 
-  repos "${REPOS[@]}"
-  
-  [ "$PRUNE" == "1" ] && gc "$REGISTRY_CONTAINER"
+repos "${REPOS[@]}"
+
+[ "$PRUNE" == "1" ] && gc "$REGISTRY_CONTAINER"  
   
 elif [ "$ACTION" == "delete" ]; then
 
